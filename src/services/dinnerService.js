@@ -14,6 +14,7 @@ import {
 import { getCurrentWeekId, getWeekStart, getWeekDates, DAY_NAMES, getDeviceId } from '../utils/weekId.js'
 import { MEAL_LIBRARY } from './mealLibrary.js'
 import { aggregateIngredients } from './ingredientAggregator.js'
+import { getPantryFlags, getPantryProfile } from './pantryProfileService.js'
 
 export { getCurrentWeekId, getWeekStart }
 
@@ -166,23 +167,9 @@ export async function setWinner(weekId, dayName, optionId, setBy = 'Chauncey') {
 }
 
 /**
- * Generate a grocery order from winning meals for the week.
- * Idempotent: won't overwrite confirmed/sent_to_store/complete orders.
+ * Build grocery meals from week winners.
  */
-export async function generateGroceryOrder(weekId) {
-  // Check existing order
-  const orderRef = doc(db, 'groceryOrders', weekId)
-  const existingSnap = await getDoc(orderRef)
-  if (existingSnap.exists()) {
-    const existing = existingSnap.data()
-    const protectedStatuses = ['confirmed', 'sent_to_store', 'complete']
-    if (protectedStatuses.includes(existing.status)) {
-      throw new Error(`Cannot overwrite grocery order with status "${existing.status}"`)
-    }
-  }
-
-  // Gather winning meals
-  const winningMeals = []
+async function getWinningMealsForWeek(weekId) {
   const dayDocs = []
 
   for (const dayName of DAY_NAMES) {
@@ -196,36 +183,107 @@ export async function generateGroceryOrder(weekId) {
     throw new Error('Need at least 4 days with winners to generate grocery list.')
   }
 
+  const winningMeals = []
   for (const dayDoc of daysWithWinners) {
     const winningOption = (dayDoc.options || []).find(o => o.optionId === dayDoc.winner)
-    if (winningOption && winningOption.mealId) {
+    if (winningOption?.mealId) {
       const meal = MEAL_LIBRARY.find(m => m.mealId === winningOption.mealId)
       if (meal) winningMeals.push(meal)
     }
   }
 
-  const { items, itemsBySection } = aggregateIngredients(winningMeals, {})
+  return winningMeals
+}
+
+function hydrateItemsWithPantryProfile(items, pantryProfile) {
+  return items.map(item => {
+    const pantryFlags = getPantryFlags(pantryProfile, item.name)
+    const excludedByStaple = !!item.isPantryStaple
+    const excludedByAlwaysHave = pantryFlags.alwaysHave
+    const excludedByOnHand = pantryFlags.onHandNow
+    const excludedByPantry = excludedByStaple || excludedByAlwaysHave || excludedByOnHand
+
+    return {
+      ...item,
+      checked: false,
+      alwaysInPantry: excludedByAlwaysHave,
+      currentlyOnHand: excludedByOnHand,
+      pantryOverride: excludedByPantry,
+      excludedReason: excludedByStaple
+        ? 'staple'
+        : excludedByAlwaysHave
+          ? 'always_have'
+          : excludedByOnHand
+            ? 'on_hand'
+            : null,
+    }
+  })
+}
+
+/**
+ * Generate a grocery order.
+ * Backward compatible usage: generateGroceryOrder(weekId)
+ * New usage: generateGroceryOrder(weekId, { mode: 'week' | 'meals', mealIds?: string[], pantryProfile?: object })
+ */
+export async function generateGroceryOrder(weekId, options = {}) {
+  const normalizedOptions = typeof options === 'string' ? { mode: options } : (options || {})
+  const mode = normalizedOptions.mode || 'week'
+  const selectedMealIds = Array.isArray(normalizedOptions.mealIds) ? normalizedOptions.mealIds : []
+  const pantryProfile = normalizedOptions.pantryProfile || getPantryProfile()
+
+  const orderRef = doc(db, 'groceryOrders', weekId)
+  const existingSnap = await getDoc(orderRef)
+  if (existingSnap.exists()) {
+    const existing = existingSnap.data()
+    const protectedStatuses = ['confirmed', 'sent_to_store', 'complete']
+    if (protectedStatuses.includes(existing.status)) {
+      throw new Error(`Cannot overwrite grocery order with status "${existing.status}"`)
+    }
+  }
+
+  let sourceMeals = []
+  if (mode === 'meals') {
+    sourceMeals = selectedMealIds
+      .map(mealId => MEAL_LIBRARY.find(m => m.mealId === mealId))
+      .filter(Boolean)
+
+    if (sourceMeals.length === 0) {
+      throw new Error('Select at least one meal to build a grocery list.')
+    }
+  } else {
+    sourceMeals = await getWinningMealsForWeek(weekId)
+  }
+
+  const { items, itemsBySection } = aggregateIngredients(sourceMeals, {}, { includePantryStaples: true })
+  const hydratedItems = hydrateItemsWithPantryProfile(items, pantryProfile)
+  const hydratedBySection = Object.fromEntries(
+    Object.entries(itemsBySection).map(([section, sectionItems]) => [
+      section,
+      hydrateItemsWithPantryProfile(sectionItems, pantryProfile),
+    ])
+  )
 
   const orderData = {
     weekId,
+    mode,
+    selectedMealIds: mode === 'meals' ? selectedMealIds : [],
     status: 'pending_review',
     createdAt: serverTimestamp(),
-    meals: winningMeals.map(m => ({ mealId: m.mealId, name: m.name })),
-    items: items.map(item => ({
-      ...item,
-      checked: false,
-      pantryOverride: false,
-    })),
-    itemsBySection: Object.fromEntries(
-      Object.entries(itemsBySection).map(([section, sItems]) => [
-        section,
-        sItems.map(item => ({ ...item, checked: false, pantryOverride: false }))
-      ])
-    ),
+    meals: sourceMeals.map(m => ({ mealId: m.mealId, name: m.name })),
+    items: hydratedItems,
+    itemsBySection: hydratedBySection,
   }
 
   await setDoc(orderRef, orderData)
-  await logOrderAction(weekId, 'created', 'Chauncey', 'user', { mealCount: winningMeals.length, itemCount: items.length }, null, 'pending_review')
+  await logOrderAction(
+    weekId,
+    'created',
+    'Chauncey',
+    'user',
+    { mode, mealCount: sourceMeals.length, itemCount: hydratedItems.length },
+    existingSnap.exists() ? existingSnap.data().status : null,
+    'pending_review'
+  )
 
   return orderData
 }

@@ -4,20 +4,23 @@
  *
  * @param {Array} winningMeals - Array of meal objects from MEAL_LIBRARY
  * @param {Object} pantryOverrides - Map of normalized ingredient name → { suppressed: bool, suppressedAt: timestamp }
+ * @param {Object} options - Aggregation options
+ * @param {boolean} options.includePantryStaples - Include ingredients marked isPantryStaple
  * @returns {{ items: Array, itemsBySection: Object, suppressedItems: Array }}
  */
-export function aggregateIngredients(winningMeals, pantryOverrides = {}) {
+export function aggregateIngredients(winningMeals, pantryOverrides = {}, options = {}) {
   if (!winningMeals || winningMeals.length === 0) {
     return { items: [], itemsBySection: {}, suppressedItems: [] }
   }
+
+  const { includePantryStaples = true } = options
 
   const rawIngredients = []
 
   for (const meal of winningMeals) {
     if (!meal || !meal.ingredients) continue
     for (const ing of meal.ingredients) {
-      // Skip pantry staples by default unless explicitly requested
-      if (ing.isPantryStaple) continue
+      if (!includePantryStaples && ing.isPantryStaple) continue
       rawIngredients.push({
         ...ing,
         fromMeal: meal.name,

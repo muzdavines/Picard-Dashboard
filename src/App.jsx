@@ -1,18 +1,21 @@
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom'
-import HomePage from './pages/HomePage.jsx'
+import GalleyView from './pages/GalleyView.jsx'
 import TasksPage from './pages/TasksPage.jsx'
+import ProjectsPage from './pages/ProjectsPage.jsx'
+import HomeOpsPage from './pages/HomeOpsPage.jsx'
+import CalendarPage from './pages/CalendarPage.jsx'
+// Legacy pages kept for backward-compat routes during Phase 1 transition
 import DinnerPage from './pages/DinnerPage.jsx'
 import GroceryPage from './pages/GroceryPage.jsx'
-import CalendarPage from './pages/CalendarPage.jsx'
-import ProjectsPage from './pages/ProjectsPage.jsx'
 
+// Phase 1: 4-item nav — Galley, Tasks, Projects, Home Ops
+// Calendar demoted to widget inside GalleyView (route kept for backward compat)
+// Dinner + Grocery consolidated under /home-ops
 const NAV_LINKS = [
-  { to: '/', label: 'Home', emoji: '🏠', exact: true },
+  { to: '/', label: 'Galley', emoji: '🍳', exact: true },
   { to: '/tasks', label: 'Tasks', emoji: '✅' },
-  { to: '/dinner', label: 'Dinner', emoji: '🍽' },
-  { to: '/grocery', label: 'Grocery', emoji: '🛒' },
-  { to: '/calendar', label: 'Calendar', emoji: '📅' },
   { to: '/projects', label: 'Projects', emoji: '🗂' },
+  { to: '/home-ops', label: 'Home Ops', emoji: '🏠' },
 ]
 
 function NavBar() {
@@ -143,12 +146,16 @@ export default function App() {
     <BrowserRouter>
       <AppLayout>
         <Routes>
-          <Route path="/" element={<HomePage />} />
+          {/* Phase 1: new primary routes */}
+          <Route path="/" element={<GalleyView />} />
           <Route path="/tasks" element={<TasksPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/home-ops" element={<HomeOpsPage />} />
+          {/* Calendar: kept as a route but removed from nav — demoted to widget */}
+          <Route path="/calendar" element={<CalendarPage />} />
+          {/* Legacy redirects — /dinner and /grocery now live under /home-ops */}
           <Route path="/dinner" element={<DinnerPage />} />
           <Route path="/grocery" element={<GroceryPage />} />
-          <Route path="/calendar" element={<CalendarPage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
         </Routes>
       </AppLayout>
     </BrowserRouter>

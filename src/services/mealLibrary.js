@@ -305,4 +305,27 @@ export const MEAL_LIBRARY = [
     ],
     source: "family-recipe"
   },
+  {
+    mealId: "meal_baked_chicken_breast",
+    name: "Baked Chicken Breast",
+    description: "simple, non-spicy, well-seasoned oven baked chicken",
+    tags: ["chicken", "quick", "healthy", "kid-friendly", "leftovers-good"],
+    prepMinutes: 5, cookMinutes: 26, servings: 5,
+    ingredients: [
+      { ingredientId: "ing_bcb_001", name: "boneless skinless chicken breasts", walmartSearchTerm: "boneless skinless chicken breasts", qty: 5, unit: "whole", storeSection: "meat", isPantryStaple: false },
+      { ingredientId: "ing_bcb_002", name: "olive oil", walmartSearchTerm: "olive oil", qty: 2.5, unit: "tbsp", storeSection: "pantry", isPantryStaple: true },
+      { ingredientId: "ing_bcb_003", name: "Italian seasoning", walmartSearchTerm: "Italian seasoning", qty: 1.25, unit: "tsp", storeSection: "pantry", isPantryStaple: true },
+      { ingredientId: "ing_bcb_004", name: "seasoned salt", walmartSearchTerm: "seasoned salt", qty: 0.625, unit: "tsp", storeSection: "pantry", isPantryStaple: true },
+      { ingredientId: "ing_bcb_005", name: "paprika", walmartSearchTerm: "paprika", qty: 1.25, unit: "tsp", storeSection: "pantry", isPantryStaple: true },
+      { ingredientId: "ing_bcb_006", name: "black pepper", walmartSearchTerm: "black pepper", qty: 0.3125, unit: "tsp", storeSection: "pantry", isPantryStaple: true },
+    ],
+    steps: [
+      "1. Preheat oven to 400°F and lightly grease a baking dish.",
+      "2. Pat chicken breasts dry, then coat with olive oil.",
+      "3. Mix Italian seasoning, seasoned salt, paprika, and black pepper; season both sides of chicken.",
+      "4. Bake for 22-26 minutes, until the thickest part reaches 165°F.",
+      "5. Rest for 5 minutes before slicing and serving.",
+    ],
+    source: "https://www.spendwithpennies.com/oven-baked-chicken-breasts/"
+  },
 ]

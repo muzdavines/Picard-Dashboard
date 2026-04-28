@@ -3,6 +3,7 @@ import {
   db, collection, query, onSnapshot, orderBy,
   addDoc, updateDoc, deleteDoc, doc, serverTimestamp, where,
 } from '../firebase.js'
+import { parseNaturalLanguage } from '../utils/nlpParser.js'
 
 const CARD = { background: '#1e293b', borderRadius: '12px', padding: '20px', marginBottom: '16px' }
 const INPUT = { background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px 12px', color: '#f8fafc', fontSize: '0.875rem', outline: 'none', width: '100%' }
@@ -13,64 +14,6 @@ const SECTION_LABEL = { fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', 
 const PRIORITY_COLORS = { high: '#ef4444', med: '#f59e0b', low: '#64748b' }
 const ROLE_OPTIONS = ['personal', 'school', 'church', 'legal', 'wife']
 const PRIORITY_OPTIONS = ['high', 'med', 'low']
-
-/**
- * Very basic natural language parser.
- * Extracts priority keywords, role keywords, and due date hints from free text.
- */
-function parseNaturalLanguage(input) {
-  let text = input.trim()
-  let priority = 'med'
-  let role = 'personal'
-  let dueDate = null
-
-  // Priority
-  if (/\bhigh\b/i.test(text)) { priority = 'high'; text = text.replace(/\bhigh\b/i, '').trim() }
-  else if (/\blow\b/i.test(text)) { priority = 'low'; text = text.replace(/\blow\b/i, '').trim() }
-  else if (/\bmed\b|\bmedium\b/i.test(text)) { priority = 'med'; text = text.replace(/\bmed\b|\bmedium\b/i, '').trim() }
-
-  // Role
-  for (const r of ROLE_OPTIONS) {
-    const re = new RegExp(`\\b${r}\\b`, 'i')
-    if (re.test(text)) {
-      role = r
-      text = text.replace(re, '').trim()
-      break
-    }
-  }
-
-  // Due date
-  const today = new Date()
-  const todayStr = today.toISOString().split('T')[0]
-
-  if (/\btoday\b/i.test(text)) {
-    dueDate = todayStr
-    text = text.replace(/\btoday\b/i, '').trim()
-  } else if (/\btomorrow\b/i.test(text)) {
-    const t = new Date(today)
-    t.setDate(today.getDate() + 1)
-    dueDate = t.toISOString().split('T')[0]
-    text = text.replace(/\btomorrow\b/i, '').trim()
-  } else {
-    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-    for (let i = 0; i < days.length; i++) {
-      const re = new RegExp(`\\b${days[i]}\\b`, 'i')
-      if (re.test(text)) {
-        const d = new Date(today)
-        const diff = (i - today.getDay() + 7) % 7 || 7
-        d.setDate(today.getDate() + diff)
-        dueDate = d.toISOString().split('T')[0]
-        text = text.replace(re, '').trim()
-        break
-      }
-    }
-  }
-
-  // Clean up extra spaces
-  const title = text.replace(/\s+/g, ' ').trim() || input.trim()
-
-  return { title, priority, role, dueDate }
-}
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState([])
@@ -368,5 +311,3 @@ function TaskRow({ task, onComplete, onDelete, completed }) {
     </div>
   )
 }
-
-const SECTION_LABEL_OBJ = SECTION_LABEL
