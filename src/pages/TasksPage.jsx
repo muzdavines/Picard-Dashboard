@@ -1,34 +1,219 @@
 import { useState, useEffect } from 'react'
 import {
   db, collection, query, onSnapshot, orderBy,
-  addDoc, updateDoc, deleteDoc, doc, serverTimestamp, where,
+  addDoc, updateDoc, deleteDoc, doc, serverTimestamp,
 } from '../firebase.js'
 import { parseNaturalLanguage } from '../utils/nlpParser.js'
+import { normalizeTaskStatus } from '../utils/agentStatus.js'
 
-const CARD = { background: '#1e293b', borderRadius: '12px', padding: '20px', marginBottom: '16px' }
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const CARD  = { background: '#1e293b', borderRadius: '12px', padding: '16px', marginBottom: '12px' }
 const INPUT = { background: '#0f172a', border: '1px solid #334155', borderRadius: '6px', padding: '8px 12px', color: '#f8fafc', fontSize: '0.875rem', outline: 'none', width: '100%' }
 const BTN_PRIMARY = { background: '#f59e0b', color: '#0f172a', border: 'none', borderRadius: '6px', padding: '8px 18px', fontSize: '0.8125rem', fontWeight: 600, cursor: 'pointer' }
 const BTN_GHOST = { background: 'transparent', color: '#94a3b8', border: '1px solid #334155', borderRadius: '6px', padding: '6px 12px', fontSize: '0.8rem', cursor: 'pointer' }
-const SECTION_LABEL = { fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '12px' }
 
 const PRIORITY_COLORS = { high: '#ef4444', med: '#f59e0b', low: '#64748b' }
-const ROLE_OPTIONS = ['personal', 'school', 'church', 'legal', 'wife']
-const PRIORITY_OPTIONS = ['high', 'med', 'low']
 
+// ── Task pipeline columns ─────────────────────────────────────────────────────
+const COLUMNS = [
+  { id: 'inbox',   label: 'Inbox',   color: '#94a3b8', desc: 'Prep Station' },
+  { id: 'active',  label: 'Active',  color: '#f59e0b', desc: 'Hot Line' },
+  { id: 'blocked', label: 'Blocked', color: '#ef4444', desc: 'Stalled' },
+  { id: 'review',  label: 'Review',  color: '#22c55e', desc: 'The Pass' },
+  { id: 'done',    label: 'Done',    color: '#475569', desc: 'Plated' },
+]
+
+// ── Firestore activity helper ─────────────────────────────────────────────────
+async function logActivity(actor, action, taskTitle, taskId) {
+  try {
+    await addDoc(collection(db, 'activityFeed'), {
+      actor, action, taskTitle: taskTitle || '', taskId: taskId || '', timestamp: serverTimestamp(),
+    })
+  } catch (_) {}
+}
+
+// ── Task card component ───────────────────────────────────────────────────────
+function TaskCard({ task, onMove, onDelete, onDragStart, onDragEnd }) {
+  const [expanded, setExpanded] = useState(false)
+  const todayStr = new Date().toISOString().split('T')[0]
+  const isOverdue = !task.completed && task.dueDate && task.dueDate < todayStr
+  const pColor = PRIORITY_COLORS[task.priority] || '#64748b'
+  const col = COLUMNS.find(c => c.id === task.status)
+  const statusColor = col ? col.color : '#64748b'
+
+  return (
+    <div
+      draggable
+      onDragStart={e => onDragStart(e, task)}
+      onDragEnd={onDragEnd}
+      style={{
+        background: '#0f172a',
+        border: '1px solid #1e293b',
+        borderLeft: `3px solid ${statusColor}`,
+        borderRadius: '8px',
+        padding: '10px 10px 8px',
+        marginBottom: '6px',
+        cursor: 'grab',
+        userSelect: 'none',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            onClick={() => setExpanded(e => !e)}
+            style={{
+              fontSize: '0.8rem',
+              color: task.completed ? '#475569' : isOverdue ? '#fca5a5' : '#e2e8f0',
+              textDecoration: task.completed ? 'line-through' : 'none',
+              cursor: 'pointer',
+              lineHeight: 1.35,
+            }}
+          >
+            {task.title}
+          </div>
+          <div style={{ display: 'flex', gap: '5px', marginTop: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+            {task.role && (
+              <span style={{ fontSize: '0.62rem', color: '#475569' }}>{task.role}</span>
+            )}
+            {task.dueDate && (
+              <span style={{ fontSize: '0.62rem', color: isOverdue ? '#ef4444' : '#475569' }}>
+                {isOverdue ? 'overdue ' : ''}{task.dueDate}
+              </span>
+            )}
+            {task.assignedTo && (
+              <span style={{ fontSize: '0.62rem', color: '#3b82f6' }}>@{task.assignedTo}</span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
+          <span style={{
+            fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
+            color: pColor, padding: '1px 5px', borderRadius: '3px', background: pColor + '18',
+          }}>
+            {task.priority}
+          </span>
+          <button
+            onClick={() => onDelete(task.id)}
+            title="Delete"
+            style={{
+              background: 'none', border: 'none', color: '#1e293b', cursor: 'pointer',
+              fontSize: '0.75rem', padding: '1px 3px', borderRadius: '3px', lineHeight: 1,
+            }}
+            onMouseEnter={e => e.target.style.color = '#ef4444'}
+            onMouseLeave={e => e.target.style.color = '#1e293b'}
+          >
+            x
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid #1e293b' }}>
+          <div style={{ fontSize: '0.65rem', color: '#334155', marginBottom: '5px', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 700 }}>
+            Move to
+          </div>
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {COLUMNS.filter(c => c.id !== task.status).map(c => (
+              <button
+                key={c.id}
+                onClick={() => { onMove(task, c.id); setExpanded(false) }}
+                style={{
+                  fontSize: '0.65rem', fontWeight: 700, cursor: 'pointer',
+                  padding: '3px 8px', borderRadius: '4px',
+                  background: c.color + '18', color: c.color,
+                  border: `1px solid ${c.color}40`,
+                }}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Pipeline column ───────────────────────────────────────────────────────────
+function PipelineColumn({ col, tasks, onMove, onDelete, onDragStart, onDragEnd }) {
+  const [dragOver, setDragOver] = useState(false)
+
+  function handleDragOver(e) { e.preventDefault(); setDragOver(true) }
+  function handleDragLeave() { setDragOver(false) }
+  function handleDrop(e) {
+    e.preventDefault()
+    const taskId = e.dataTransfer.getData('taskId')
+    if (taskId) onMove({ id: taskId }, col.id)
+    setDragOver(false)
+  }
+
+  return (
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{
+        minWidth: '175px',
+        flex: '1 1 175px',
+        background: dragOver ? col.color + '08' : '#0a1628',
+        border: `1px solid ${dragOver ? col.color + '50' : '#1e293b'}`,
+        borderTop: `3px solid ${col.color}`,
+        borderRadius: '8px',
+        padding: '10px 8px',
+        transition: 'background 0.15s, border-color 0.15s',
+        minHeight: '200px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+        <span style={{ fontSize: '0.65rem', fontWeight: 700, color: col.color, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          {col.label}
+        </span>
+        <span style={{ fontSize: '0.6rem', color: '#334155' }}>{col.desc}</span>
+        <span style={{
+          marginLeft: 'auto', fontSize: '0.62rem', fontWeight: 700,
+          color: tasks.length > 0 ? col.color : '#334155',
+          background: tasks.length > 0 ? col.color + '18' : 'transparent',
+          padding: '1px 5px', borderRadius: '10px',
+        }}>
+          {tasks.length}
+        </span>
+      </div>
+      <div>
+        {tasks.map(t => (
+          <TaskCard
+            key={t.id}
+            task={t}
+            onMove={onMove}
+            onDelete={onDelete}
+            onDragStart={onDragStart}
+            onDragEnd={onDragEnd}
+          />
+        ))}
+        {tasks.length === 0 && (
+          <div style={{ fontSize: '0.72rem', color: '#1e293b', textAlign: 'center', padding: '20px 0', fontStyle: 'italic' }}>
+            empty
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Main TasksPage ────────────────────────────────────────────────────────────
 export default function TasksPage() {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
   const [input, setInput] = useState('')
-  const [filterRole, setFilterRole] = useState('all')
-  const [filterPriority, setFilterPriority] = useState('all')
-  const [showCompleted, setShowCompleted] = useState(false)
   const [parsed, setParsed] = useState(null)
   const [error, setError] = useState('')
+  const [filterRole, setFilterRole] = useState('all')
+  const [showDone, setShowDone] = useState(false)
+  const [draggingId, setDraggingId] = useState(null)
 
   useEffect(() => {
     const q = query(collection(db, 'tasks'), orderBy('createdAt', 'desc'))
     const unsub = onSnapshot(q, snap => {
-      setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      setTasks(snap.docs.map(d => normalizeTaskStatus({ id: d.id, ...d.data() })))
       setLoading(false)
     }, err => {
       console.error(err)
@@ -38,11 +223,7 @@ export default function TasksPage() {
   }, [])
 
   useEffect(() => {
-    if (input.trim().length > 2) {
-      setParsed(parseNaturalLanguage(input))
-    } else {
-      setParsed(null)
-    }
+    setParsed(input.trim().length > 2 ? parseNaturalLanguage(input) : null)
   }, [input])
 
   async function handleAdd(e) {
@@ -52,26 +233,30 @@ export default function TasksPage() {
     const { title, priority, role, dueDate } = parseNaturalLanguage(input)
     try {
       await addDoc(collection(db, 'tasks'), {
-        title,
-        priority,
-        role,
+        title, priority, role,
         dueDate: dueDate || '',
         completed: false,
+        status: 'inbox',
         createdAt: serverTimestamp(),
       })
+      await logActivity('Riker', 'added ticket', title, '')
       setInput('')
       setParsed(null)
     } catch (err) {
-      setError('Failed to add task. Try again.')
+      setError('Failed to add task.')
     }
   }
 
-  async function handleComplete(task) {
+  async function handleMove(task, newStatus) {
+    const isDone = newStatus === 'done'
+    const full = tasks.find(t => t.id === task.id)
     try {
       await updateDoc(doc(db, 'tasks', task.id), {
-        completed: true,
-        completedAt: serverTimestamp(),
+        status: newStatus,
+        completed: isDone,
+        ...(isDone ? { completedAt: serverTimestamp() } : {}),
       })
+      await logActivity('Riker', `moved to ${newStatus}`, full ? full.title : '', task.id)
     } catch (err) {
       console.error(err)
     }
@@ -85,50 +270,50 @@ export default function TasksPage() {
     }
   }
 
-  async function handleUncomplete(task) {
-    try {
-      await updateDoc(doc(db, 'tasks', task.id), { completed: false, completedAt: null })
-    } catch (err) {
-      console.error(err)
-    }
+  function handleDragStart(e, task) {
+    e.dataTransfer.setData('taskId', task.id)
+    setDraggingId(task.id)
   }
+  function handleDragEnd() { setDraggingId(null) }
 
-  const todayStr = new Date().toISOString().split('T')[0]
+  const roles = [...new Set(tasks.map(t => t.role).filter(Boolean))].sort()
 
-  const filteredTasks = tasks.filter(t => {
-    if (!showCompleted && t.completed) return false
-    if (showCompleted && !t.completed) return false
+  const filtered = tasks.filter(t => {
     if (filterRole !== 'all' && t.role !== filterRole) return false
-    if (filterPriority !== 'all' && t.priority !== filterPriority) return false
+    if (!showDone && (t.status === 'done' || t.completed)) return false
     return true
   })
 
-  const overdueTasks = filteredTasks.filter(t => !t.completed && t.dueDate && t.dueDate < todayStr)
-  const dueTodayTasks = filteredTasks.filter(t => !t.completed && t.dueDate === todayStr)
-  const upcomingTasks = filteredTasks.filter(t => !t.completed && (!t.dueDate || t.dueDate > todayStr))
-  const completedTasks = filteredTasks.filter(t => t.completed)
+  const byStatus = {}
+  COLUMNS.forEach(c => { byStatus[c.id] = [] })
+  filtered.forEach(t => {
+    const key = t.status || 'inbox'
+    if (byStatus[key] !== undefined) byStatus[key].push(t)
+  })
+
+  const openCount = tasks.filter(t => !t.completed).length
 
   return (
     <div>
-      <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: '#f8fafc', margin: '0 0 24px' }}>Tasks</h1>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: '#f8fafc', margin: 0 }}>Task Pipeline</h1>
+        <span style={{ fontSize: '0.72rem', color: '#475569' }}>{openCount} open</span>
+      </div>
 
       {/* Quick add */}
-      <div style={CARD}>
-        <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#94a3b8', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '10px' }}>
-          Add Task
-        </div>
-        <form onSubmit={handleAdd} style={{ display: 'flex', gap: '8px', marginBottom: parsed ? '12px' : 0 }}>
+      <div style={{ ...CARD, marginBottom: '14px' }}>
+        <form onSubmit={handleAdd} style={{ display: 'flex', gap: '8px', marginBottom: parsed ? '10px' : 0 }}>
           <input
             style={{ ...INPUT, flex: 1 }}
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder={"\"high school pick up kids friday\" → auto-parsed"}
+            placeholder='"high school pick up kids friday" — NLP parsed'
           />
           <button type="submit" style={BTN_PRIMARY}>Add</button>
         </form>
         {parsed && input.trim().length > 2 && (
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
-            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Parsed:</span>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+            <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Parsed:</span>
             <Tag label={parsed.title} color="#f8fafc" />
             <Tag label={`${parsed.priority} priority`} color={PRIORITY_COLORS[parsed.priority]} />
             <Tag label={parsed.role} color="#a855f7" />
@@ -139,64 +324,53 @@ export default function TasksPage() {
       </div>
 
       {/* Filters */}
-      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.75rem', color: '#64748b', marginRight: '4px' }}>Role:</span>
-          {['all', ...ROLE_OPTIONS].map(r => (
-            <button
-              key={r}
-              onClick={() => setFilterRole(r)}
-              style={{
-                ...BTN_GHOST,
-                borderColor: filterRole === r ? '#f59e0b' : '#334155',
-                color: filterRole === r ? '#f59e0b' : '#94a3b8',
-                padding: '4px 10px',
-                fontSize: '0.75rem',
-              }}
-            >{r}</button>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.75rem', color: '#64748b', marginRight: '4px' }}>Priority:</span>
-          {['all', ...PRIORITY_OPTIONS].map(p => (
-            <button
-              key={p}
-              onClick={() => setFilterPriority(p)}
-              style={{
-                ...BTN_GHOST,
-                borderColor: filterPriority === p ? '#f59e0b' : '#334155',
-                color: filterPriority === p ? PRIORITY_COLORS[p] || '#f59e0b' : '#94a3b8',
-                padding: '4px 10px',
-                fontSize: '0.75rem',
-              }}
-            >{p}</button>
-          ))}
-        </div>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.72rem', color: '#64748b' }}>Role:</span>
+        {['all', ...roles].map(r => (
+          <button
+            key={r}
+            onClick={() => setFilterRole(r)}
+            style={{
+              ...BTN_GHOST,
+              borderColor: filterRole === r ? '#f59e0b' : '#1e293b',
+              color: filterRole === r ? '#f59e0b' : '#64748b',
+              padding: '3px 10px', fontSize: '0.72rem',
+            }}
+          >{r}</button>
+        ))}
         <button
-          onClick={() => setShowCompleted(!showCompleted)}
-          style={{ ...BTN_GHOST, marginLeft: 'auto', borderColor: showCompleted ? '#22c55e' : '#334155', color: showCompleted ? '#22c55e' : '#94a3b8' }}
+          onClick={() => setShowDone(d => !d)}
+          style={{
+            ...BTN_GHOST, marginLeft: 'auto',
+            borderColor: showDone ? '#22c55e' : '#1e293b',
+            color: showDone ? '#22c55e' : '#64748b',
+            padding: '3px 10px', fontSize: '0.72rem',
+          }}
         >
-          {showCompleted ? '✓ Completed' : 'Show Completed'}
+          {showDone ? 'Hide Done' : 'Show Done'}
         </button>
       </div>
 
+      {/* Pipeline board */}
       {loading ? (
-        <p style={{ color: '#64748b' }}>Loading tasks...</p>
+        <div style={{ color: '#64748b', fontSize: '0.875rem' }}>Loading tasks...</div>
       ) : (
-        <>
-          {!showCompleted && overdueTasks.length > 0 && (
-            <TaskSection title="Overdue" tasks={overdueTasks} color="#ef4444" onComplete={handleComplete} onDelete={handleDelete} />
-          )}
-          {!showCompleted && dueTodayTasks.length > 0 && (
-            <TaskSection title="Due Today" tasks={dueTodayTasks} color="#f59e0b" onComplete={handleComplete} onDelete={handleDelete} />
-          )}
-          {!showCompleted && (
-            <TaskSection title="Upcoming" tasks={upcomingTasks} color="#94a3b8" onComplete={handleComplete} onDelete={handleDelete} />
-          )}
-          {showCompleted && (
-            <TaskSection title="Completed" tasks={completedTasks} color="#22c55e" onComplete={handleUncomplete} onDelete={handleDelete} completed />
-          )}
-        </>
+        <div style={{
+          display: 'flex', gap: '8px', overflowX: 'auto',
+          paddingBottom: '16px', alignItems: 'flex-start',
+        }}>
+          {COLUMNS.filter(c => showDone || c.id !== 'done').map(col => (
+            <PipelineColumn
+              key={col.id}
+              col={col}
+              tasks={byStatus[col.id] || []}
+              onMove={handleMove}
+              onDelete={handleDelete}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+            />
+          ))}
+        </div>
       )}
     </div>
   )
@@ -205,109 +379,8 @@ export default function TasksPage() {
 function Tag({ label, color }) {
   return (
     <span style={{
-      background: color + '18',
-      color,
-      padding: '2px 8px',
-      borderRadius: '4px',
-      fontSize: '0.75rem',
-      fontWeight: 600,
-      border: `1px solid ${color}30`,
+      background: color + '18', color, padding: '2px 8px', borderRadius: '4px',
+      fontSize: '0.72rem', fontWeight: 600, border: `1px solid ${color}30`,
     }}>{label}</span>
-  )
-}
-
-function TaskSection({ title, tasks, color, onComplete, onDelete, completed }) {
-  if (tasks.length === 0) return null
-  return (
-    <div style={{ ...CARD, borderTop: `3px solid ${color}` }}>
-      <div style={{ ...SECTION_LABEL, color }}>
-        {title} <span style={{ fontWeight: 400, fontSize: '0.7rem' }}>({tasks.length})</span>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        {tasks.map(task => (
-          <TaskRow key={task.id} task={task} onComplete={onComplete} onDelete={onDelete} completed={completed} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function TaskRow({ task, onComplete, onDelete, completed }) {
-  const todayStr = new Date().toISOString().split('T')[0]
-  const isOverdue = !task.completed && task.dueDate && task.dueDate < todayStr
-
-  return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-      padding: '10px 8px',
-      borderRadius: '8px',
-      background: 'transparent',
-      transition: 'background 0.1s',
-    }}
-      onMouseEnter={e => e.currentTarget.style.background = '#0f172a'}
-      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-    >
-      <button
-        onClick={() => onComplete(task)}
-        title={completed ? "Mark incomplete" : "Mark complete"}
-        style={{
-          width: '18px', height: '18px',
-          borderRadius: '4px',
-          border: `2px solid ${completed ? '#22c55e' : PRIORITY_COLORS[task.priority] || '#334155'}`,
-          background: completed ? '#22c55e20' : 'transparent',
-          cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0,
-          color: '#22c55e', fontSize: '0.65rem',
-        }}
-      >
-        {completed && '✓'}
-      </button>
-
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <span style={{
-          fontSize: '0.875rem',
-          color: completed ? '#64748b' : isOverdue ? '#fca5a5' : '#f8fafc',
-          textDecoration: completed ? 'line-through' : 'none',
-        }}>
-          {task.title}
-        </span>
-        <div style={{ display: 'flex', gap: '6px', marginTop: '2px', flexWrap: 'wrap' }}>
-          {task.role && <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{task.role}</span>}
-          {task.dueDate && (
-            <span style={{ fontSize: '0.7rem', color: isOverdue ? '#ef4444' : '#64748b' }}>
-              {isOverdue ? '⚠ ' : ''}{task.dueDate}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <span style={{
-        fontSize: '0.7rem',
-        fontWeight: 700,
-        padding: '2px 6px',
-        borderRadius: '4px',
-        background: (PRIORITY_COLORS[task.priority] || '#64748b') + '20',
-        color: PRIORITY_COLORS[task.priority] || '#64748b',
-        textTransform: 'uppercase',
-        flexShrink: 0,
-      }}>
-        {task.priority}
-      </span>
-
-      <button
-        onClick={() => onDelete(task.id)}
-        title="Delete"
-        style={{
-          background: 'none', border: 'none', color: '#334155', cursor: 'pointer',
-          fontSize: '0.85rem', padding: '4px', borderRadius: '4px',
-          flexShrink: 0,
-        }}
-        onMouseEnter={e => e.target.style.color = '#ef4444'}
-        onMouseLeave={e => e.target.style.color = '#334155'}
-      >✕</button>
-    </div>
   )
 }
